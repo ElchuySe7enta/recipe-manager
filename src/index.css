@@ -1,0 +1,15 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+body {
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+
+.scrollbar-thin::-webkit-scrollbar { width: 6px; height: 6px; }
+.scrollbar-thin::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 3px; }
+
+/* iOS Safari zooms inputs whose font-size is < 16px on focus. Force minimum 16px on phones. */
+@media (max-width: 640px) {
+  input, select, textarea { font-size: 16px !important; }
+}
