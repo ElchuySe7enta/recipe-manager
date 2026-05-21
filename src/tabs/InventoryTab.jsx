@@ -98,7 +98,7 @@ export default function InventoryTab({ inventory, onAdd, onUpdate, onDelete }) {
       <section className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-5 h-fit">
         <h2 className="font-semibold text-lg mb-3">Add item</h2>
         <div className="space-y-3">
-          <Field label="Name"><input value={addDraft.name} onChange={(e) => setAddDraft({ ...addDraft, name: e.target.value })} className={inputCls} /></Field>
+          <Field label="Name"><input list="ingredient-names-list" value={addDraft.name} onChange={(e) => setAddDraft({ ...addDraft, name: e.target.value })} className={inputCls} /></Field>
           <div className="grid grid-cols-2 gap-3">
             <Field label="Quantity"><input type="number" value={addDraft.quantity} onChange={(e) => setAddDraft({ ...addDraft, quantity: e.target.value })} className={inputCls} /></Field>
             <Field label="Unit"><input list="inventory-units-list" value={addDraft.unit} onChange={(e) => setAddDraft({ ...addDraft, unit: e.target.value })} placeholder="g, mL, pcs" className={inputCls} /></Field>
@@ -120,7 +120,7 @@ export default function InventoryTab({ inventory, onAdd, onUpdate, onDelete }) {
               <button onClick={closeEdit} className="text-slate-400 hover:text-slate-700 -m-2 p-2"><Icon d={I.x} className="w-5 h-5" /></button>
             </div>
             <div className="space-y-3">
-              <Field label="Name"><input value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} className={inputCls} autoFocus /></Field>
+              <Field label="Name"><input list="ingredient-names-list" value={editDraft.name} onChange={(e) => setEditDraft({ ...editDraft, name: e.target.value })} className={inputCls} autoFocus /></Field>
               <div className="grid grid-cols-2 gap-3">
                 <Field label="Quantity"><input type="number" value={editDraft.quantity} onChange={(e) => setEditDraft({ ...editDraft, quantity: e.target.value })} className={inputCls} /></Field>
                 <Field label="Unit"><input list="inventory-units-list" value={editDraft.unit} onChange={(e) => setEditDraft({ ...editDraft, unit: e.target.value })} placeholder="g, mL, pcs" className={inputCls} /></Field>

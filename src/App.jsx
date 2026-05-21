@@ -162,6 +162,22 @@ export default function App({ session, profile, onProfileChange }) {
 
   const handleSignOut = () => supabase.auth.signOut();
 
+  // Unique ingredient names gathered from both the inventory and every recipe.
+  // Powers the <datalist id="ingredient-names-list"> autocomplete so users
+  // pick existing names instead of typing variants that create duplicates.
+  const ingredientNames = useMemo(() => {
+    const seen = new Map(); // lowercased key → first-seen original spelling
+    const add = (n) => {
+      const trimmed = (n || "").trim();
+      if (!trimmed) return;
+      const k = trimmed.toLowerCase();
+      if (!seen.has(k)) seen.set(k, trimmed);
+    };
+    for (const it of inventory) add(it.name);
+    for (const r of recipes) for (const ing of (r.ingredients || [])) add(ing.name);
+    return Array.from(seen.values()).sort((a, b) => a.localeCompare(b));
+  }, [inventory, recipes]);
+
   if (loading) {
     return <div className="min-h-screen flex items-center justify-center text-slate-500 text-sm">Loading household…</div>;
   }
@@ -196,6 +212,9 @@ export default function App({ session, profile, onProfileChange }) {
 
       <datalist id="inventory-units-list">
         {UNIT_SUGGESTIONS.map((u) => <option key={u} value={u} />)}
+      </datalist>
+      <datalist id="ingredient-names-list">
+        {ingredientNames.map((n) => <option key={n} value={n} />)}
       </datalist>
 
       <main>

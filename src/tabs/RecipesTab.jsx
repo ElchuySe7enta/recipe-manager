@@ -32,7 +32,23 @@ export default function RecipesTab({ recipes, inventory, onSave, onDelete }) {
     await onDelete(id);
   };
 
-  const updateIngredient = (idx, patch) => setDraft((d) => ({ ...d, ingredients: d.ingredients.map((ing, i) => i === idx ? { ...ing, ...patch } : ing) }));
+  // When the user picks a name that matches an existing inventory item AND the
+  // unit field is still empty, auto-fill the unit from inventory. Helps keep
+  // recipe ingredients consistent with how the household stocks them.
+  const updateIngredient = (idx, patch) => setDraft((d) => ({
+    ...d,
+    ingredients: d.ingredients.map((ing, i) => {
+      if (i !== idx) return ing;
+      const next = { ...ing, ...patch };
+      if (patch.name !== undefined && !next.unit) {
+        const matched = inventory.find(
+          (it) => (it.name || "").trim().toLowerCase() === next.name.trim().toLowerCase()
+        );
+        if (matched?.unit) next.unit = matched.unit;
+      }
+      return next;
+    }),
+  }));
   const addIngredient = () => setDraft((d) => ({ ...d, ingredients: [...d.ingredients, { name: "", quantity: "", unit: "" }] }));
   const removeIngredient = (idx) => setDraft((d) => ({ ...d, ingredients: d.ingredients.filter((_, i) => i !== idx) }));
 
@@ -83,7 +99,7 @@ export default function RecipesTab({ recipes, inventory, onSave, onDelete }) {
             <div className="space-y-2">
               {draft.ingredients.map((ing, idx) => (
                 <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-                  <input value={ing.name} onChange={(e) => updateIngredient(idx, { name: e.target.value })} placeholder="Ingredient" className={inputCls + " col-span-12 sm:col-span-6"} />
+                  <input list="ingredient-names-list" value={ing.name} onChange={(e) => updateIngredient(idx, { name: e.target.value })} placeholder="Ingredient" className={inputCls + " col-span-12 sm:col-span-6"} />
                   <input type="number" value={ing.quantity} onChange={(e) => updateIngredient(idx, { quantity: e.target.value })} placeholder="Qty" className={inputCls + " col-span-4 sm:col-span-2"} />
                   <input list="inventory-units-list" value={ing.unit} onChange={(e) => updateIngredient(idx, { unit: e.target.value })} placeholder="Unit" className={inputCls + " col-span-7 sm:col-span-3"} />
                   <button onClick={() => removeIngredient(idx)} className="col-span-1 text-slate-400 hover:text-rose-600 flex justify-center"><Icon d={I.x} className="w-4 h-4" /></button>
