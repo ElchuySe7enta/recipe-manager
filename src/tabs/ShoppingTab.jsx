@@ -9,20 +9,28 @@ export default function ShoppingTab({ state, onReplaceInventory }) {
   const days = weekDays(anchor);
   const recipeMap = useMemo(() => Object.fromEntries(state.recipes.map((r) => [r.id, r])), [state.recipes]);
 
+  // Sum needed quantities in BASE units, scaling each recipe by the slot's
+  // servings override (defaults to the recipe's own servings → multiplier 1).
   const needed = useMemo(() => {
     const sum = {};
+    const addRecipe = (r, planned) => {
+      const mult = planned && r.servings ? planned / r.servings : 1;
+      for (const ing of r.ingredients) {
+        const k = ingredientKey(ing.name, ing.unit);
+        if (!sum[k]) sum[k] = { name: ing.name, dim: dimensionOf(ing.unit), baseQty: 0 };
+        sum[k].baseQty += toBase(ing.quantity, ing.unit) * mult;
+      }
+    };
     for (const d of days) {
       const day = state.mealPlan[d] || {};
       for (const meal of MEALS) {
-        const rid = day[meal];
-        if (!rid) continue;
-        const r = recipeMap[rid];
-        if (!r) continue;
-        for (const ing of r.ingredients) {
-          const k = ingredientKey(ing.name, ing.unit);
-          if (!sum[k]) sum[k] = { name: ing.name, dim: dimensionOf(ing.unit), baseQty: 0 };
-          sum[k].baseQty += toBase(ing.quantity, ing.unit);
-        }
+        const slot = day[meal];
+        if (!slot) continue;
+        const main = slot.main_recipe_id ? recipeMap[slot.main_recipe_id] : null;
+        const side = slot.side_recipe_id ? recipeMap[slot.side_recipe_id] : null;
+        const planned = slot.servings || main?.servings || side?.servings || null;
+        if (main) addRecipe(main, planned);
+        if (side) addRecipe(side, planned);
       }
     }
     return sum;
@@ -65,9 +73,7 @@ export default function ShoppingTab({ state, onReplaceInventory }) {
     }
     setPurchasing({ key: row.key, name: row.name, dim: row.dim, quantity: String(row.buy.value), unit: row.buy.unit });
   };
-
   const closePurchase = () => setPurchasing(null);
-
   const confirmPurchase = async () => {
     if (!purchasing) return;
     const qty = Number(purchasing.quantity) || 0;
@@ -124,7 +130,7 @@ export default function ShoppingTab({ state, onReplaceInventory }) {
           ))}
         </ul>
       )}
-      <p className="mt-4 text-xs text-slate-500">Tap a row to log a purchase — set the quantity you actually bought and it'll be added to your inventory.</p>
+      <p className="mt-4 text-xs text-slate-500">Tap a row to log a purchase. Quantities respect per-meal serving overrides set in the Meal Plan.</p>
 
       {purchasing && (
         <div className="fixed inset-0 z-50 bg-slate-900/50 flex items-end sm:items-center justify-center p-3 sm:p-6" onClick={closePurchase}>

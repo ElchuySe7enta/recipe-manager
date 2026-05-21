@@ -8,12 +8,16 @@ import SuggestionsTab from "./tabs/SuggestionsTab.jsx";
 import ShoppingTab from "./tabs/ShoppingTab.jsx";
 import HouseholdMenu from "./HouseholdMenu.jsx";
 
-// Convert DB rows ({date, meal, recipe_id}) into UI shape ({date: {meal: recipe_id}}).
+// Convert DB rows ({date, meal, slot_type, recipe_id, servings}) into UI shape:
+//   { date: { meal: { main_recipe_id, side_recipe_id, servings } } }
 const planFromRows = (rows) => {
   const out = {};
   for (const r of rows) {
     if (!out[r.date]) out[r.date] = {};
-    out[r.date][r.meal] = r.recipe_id;
+    if (!out[r.date][r.meal]) out[r.date][r.meal] = {};
+    if (r.slot_type === "main") out[r.date][r.meal].main_recipe_id = r.recipe_id;
+    if (r.slot_type === "side") out[r.date][r.meal].side_recipe_id = r.recipe_id;
+    if (r.servings != null) out[r.date][r.meal].servings = r.servings;
   }
   return out;
 };
@@ -26,7 +30,6 @@ export default function App({ session, profile, onProfileChange }) {
   const [mealPlan, setMealPlan] = useState({});
   const [loading, setLoading] = useState(true);
 
-  // Initial load
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -45,18 +48,14 @@ export default function App({ session, profile, onProfileChange }) {
     return () => { cancelled = true; };
   }, [householdId]);
 
-  // Real-time: subscribe to changes on our household's rows.
   useEffect(() => {
     const channel = supabase
       .channel(`household-${householdId}`)
-      .on("postgres_changes",
-        { event: "*", schema: "public", table: "inventory", filter: `household_id=eq.${householdId}` },
+      .on("postgres_changes", { event: "*", schema: "public", table: "inventory", filter: `household_id=eq.${householdId}` },
         (payload) => applyInventoryChange(payload, setInventory))
-      .on("postgres_changes",
-        { event: "*", schema: "public", table: "recipes", filter: `household_id=eq.${householdId}` },
+      .on("postgres_changes", { event: "*", schema: "public", table: "recipes", filter: `household_id=eq.${householdId}` },
         (payload) => applyRecipeChange(payload, setRecipes))
-      .on("postgres_changes",
-        { event: "*", schema: "public", table: "meal_plan_entries", filter: `household_id=eq.${householdId}` },
+      .on("postgres_changes", { event: "*", schema: "public", table: "meal_plan_entries", filter: `household_id=eq.${householdId}` },
         (payload) => applyPlanChange(payload, setMealPlan))
       .subscribe();
     return () => { supabase.removeChannel(channel); };
@@ -77,10 +76,8 @@ export default function App({ session, profile, onProfileChange }) {
     await supabase.from("inventory").delete().eq("id", id);
     setInventory((s) => s.filter((x) => x.id !== id));
   };
-  // Bulk replace inventory (used by "Mark as cooked" deduction)
   const replaceInventory = async (newInventory) => {
     setInventory(newInventory);
-    // Diff against current state and write changes
     const ops = [];
     for (const it of newInventory) {
       const existing = inventory.find((x) => x.id === it.id);
@@ -99,6 +96,7 @@ export default function App({ session, profile, onProfileChange }) {
       const { data } = await supabase.from("recipes").update({
         name: recipe.name, servings: Number(recipe.servings) || 1,
         ingredients: recipe.ingredients, instructions: recipe.instructions || "",
+        recipe_type: recipe.recipe_type || "main",
         updated_at: new Date().toISOString(),
       }).eq("id", recipe.id).select().single();
       if (data) setRecipes((s) => upsert(s, data));
@@ -107,10 +105,10 @@ export default function App({ session, profile, onProfileChange }) {
     const { data } = await supabase.from("recipes").insert({
       household_id: householdId, name: recipe.name, servings: Number(recipe.servings) || 1,
       ingredients: recipe.ingredients, instructions: recipe.instructions || "",
+      recipe_type: recipe.recipe_type || "main",
     }).select().single();
     if (data) setRecipes((s) => upsert(s, data));
 
-    // Auto-create stock entries for any new ingredients
     if (data) {
       const existingKeys = new Set(inventory.map((it) => ingredientKey(it.name, it.unit)));
       const seen = new Set();
@@ -134,26 +132,32 @@ export default function App({ session, profile, onProfileChange }) {
   };
 
   // ---- Meal plan mutations ----
-  const setMealSlot = async (date, meal, recipeId) => {
-    if (recipeId) {
-      const { data } = await supabase.from("meal_plan_entries")
-        .upsert({ household_id: householdId, date, meal, recipe_id: recipeId }, { onConflict: "household_id,date,meal" })
-        .select().single();
-      if (data) {
-        setMealPlan((p) => ({ ...p, [date]: { ...(p[date] || {}), [meal]: recipeId } }));
-      }
-    } else {
-      await supabase.from("meal_plan_entries").delete().eq("household_id", householdId).eq("date", date).eq("meal", meal);
-      setMealPlan((p) => {
-        const next = { ...p };
-        if (next[date]) {
-          next[date] = { ...next[date] };
-          delete next[date][meal];
-          if (Object.keys(next[date]).length === 0) delete next[date];
-        }
-        return next;
-      });
+  // setMealSlot replaces the entire (date, meal) entry: writes/deletes both
+  // main and side rows as needed, and stamps servings on every row written.
+  const setMealSlot = async (date, meal, { main_recipe_id, side_recipe_id, servings }) => {
+    await supabase.from("meal_plan_entries").delete()
+      .eq("household_id", householdId).eq("date", date).eq("meal", meal);
+    const toInsert = [];
+    if (main_recipe_id) toInsert.push({ household_id: householdId, date, meal, slot_type: "main", recipe_id: main_recipe_id, servings: servings || null });
+    if (side_recipe_id) toInsert.push({ household_id: householdId, date, meal, slot_type: "side", recipe_id: side_recipe_id, servings: servings || null });
+    if (toInsert.length > 0) {
+      await supabase.from("meal_plan_entries").insert(toInsert);
     }
+    setMealPlan((p) => {
+      const np = { ...p };
+      np[date] = { ...(np[date] || {}) };
+      if (main_recipe_id || side_recipe_id) {
+        np[date][meal] = {
+          main_recipe_id: main_recipe_id || undefined,
+          side_recipe_id: side_recipe_id || undefined,
+          servings: servings || undefined,
+        };
+      } else {
+        delete np[date][meal];
+      }
+      if (Object.keys(np[date]).length === 0) delete np[date];
+      return np;
+    });
   };
 
   const handleSignOut = () => supabase.auth.signOut();
@@ -182,13 +186,7 @@ export default function App({ session, profile, onProfileChange }) {
       </header>
 
       <nav className="flex flex-wrap gap-1 mb-5 bg-white rounded-lg p-1 shadow-sm border border-slate-200 sm:w-fit">
-        {[
-          ["inventory", "Inventory"],
-          ["recipes", "Recipes"],
-          ["plan", "Meal Plan"],
-          ["suggestions", "Suggestions"],
-          ["shopping", "Shopping"],
-        ].map(([k, label]) => (
+        {[["inventory","Inventory"],["recipes","Recipes"],["plan","Meal Plan"],["suggestions","Suggestions"],["shopping","Shopping"]].map(([k, label]) => (
           <button key={k} onClick={() => setTab(k)}
             className={`flex-1 sm:flex-none px-3 sm:px-4 py-2 rounded-md text-xs sm:text-sm font-medium transition whitespace-nowrap ${tab === k ? "bg-emerald-600 text-white" : "text-slate-700 hover:bg-slate-100"}`}>
             {label}
@@ -208,14 +206,11 @@ export default function App({ session, profile, onProfileChange }) {
         {tab === "shopping" && <ShoppingTab state={state} onReplaceInventory={replaceInventory} />}
       </main>
 
-      <footer className="text-xs text-slate-400 mt-10 text-center">
-        Data is synced across devices for everyone in your household.
-      </footer>
+      <footer className="text-xs text-slate-400 mt-10 text-center">Data is synced across devices for everyone in your household.</footer>
     </div>
   );
 }
 
-// ---- Real-time helpers ----
 const upsert = (list, row) => {
   const i = list.findIndex((x) => x.id === row.id);
   if (i === -1) return [...list, row];
@@ -225,8 +220,7 @@ const upsert = (list, row) => {
 };
 
 function applyInventoryChange(payload, set) {
-  if (payload.eventType === "INSERT") set((s) => upsert(s, payload.new));
-  else if (payload.eventType === "UPDATE") set((s) => upsert(s, payload.new));
+  if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") set((s) => upsert(s, payload.new));
   else if (payload.eventType === "DELETE") set((s) => s.filter((x) => x.id !== payload.old.id));
 }
 function applyRecipeChange(payload, set) {
@@ -234,19 +228,30 @@ function applyRecipeChange(payload, set) {
   else if (payload.eventType === "DELETE") set((s) => s.filter((x) => x.id !== payload.old.id));
 }
 function applyPlanChange(payload, set) {
-  if (payload.eventType === "INSERT" || payload.eventType === "UPDATE") {
-    const r = payload.new;
-    set((p) => ({ ...p, [r.date]: { ...(p[r.date] || {}), [r.meal]: r.recipe_id } }));
-  } else if (payload.eventType === "DELETE") {
+  if (payload.eventType === "DELETE") {
     const r = payload.old;
     set((p) => {
-      const next = { ...p };
-      if (next[r.date]) {
-        next[r.date] = { ...next[r.date] };
-        delete next[r.date][r.meal];
-        if (Object.keys(next[r.date]).length === 0) delete next[r.date];
+      const np = { ...p };
+      if (np[r.date]?.[r.meal]) {
+        np[r.date] = { ...np[r.date] };
+        np[r.date][r.meal] = { ...np[r.date][r.meal] };
+        if (r.slot_type === "main") delete np[r.date][r.meal].main_recipe_id;
+        if (r.slot_type === "side") delete np[r.date][r.meal].side_recipe_id;
+        if (!np[r.date][r.meal].main_recipe_id && !np[r.date][r.meal].side_recipe_id) delete np[r.date][r.meal];
+        if (Object.keys(np[r.date]).length === 0) delete np[r.date];
       }
-      return next;
+      return np;
+    });
+  } else {
+    const r = payload.new;
+    set((p) => {
+      const np = { ...p };
+      np[r.date] = { ...(np[r.date] || {}) };
+      np[r.date][r.meal] = { ...(np[r.date][r.meal] || {}) };
+      if (r.slot_type === "main") np[r.date][r.meal].main_recipe_id = r.recipe_id;
+      if (r.slot_type === "side") np[r.date][r.meal].side_recipe_id = r.recipe_id;
+      if (r.servings != null) np[r.date][r.meal].servings = r.servings;
+      return np;
     });
   }
 }
