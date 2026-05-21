@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import { CATEGORIES, Field, inputCls, Icon, I } from "../lib/utils.jsx";
+import { ingredientKey, toBase, fromBase } from "../lib/units";
 
 export default function InventoryTab({ inventory, onAdd, onUpdate, onDelete }) {
   const [filter, setFilter] = useState("All");
@@ -16,20 +17,50 @@ export default function InventoryTab({ inventory, onAdd, onUpdate, onDelete }) {
 
   const openEdit = (it) => setEditDraft({ ...it });
   const closeEdit = () => setEditDraft(null);
+
+  // When saving an edit, if the new name+dimension collides with another
+  // existing inventory row, merge quantities and delete this one instead of
+  // creating a parallel row.
   const saveEdit = async () => {
     if (!editDraft || !editDraft.name.trim()) return;
-    await onUpdate(editDraft);
+    const editedKey = ingredientKey(editDraft.name, editDraft.unit);
+    const duplicate = inventory.find(
+      (it) => it.id !== editDraft.id && ingredientKey(it.name, it.unit) === editedKey
+    );
+    if (duplicate) {
+      const editedBase = toBase(editDraft.quantity, editDraft.unit);
+      const newBase = toBase(duplicate.quantity, duplicate.unit) + editedBase;
+      const newQty = Math.round(fromBase(newBase, duplicate.unit) * 1000) / 1000;
+      await onUpdate({ ...duplicate, quantity: newQty });
+      await onDelete(editDraft.id);
+    } else {
+      await onUpdate(editDraft);
+    }
     closeEdit();
   };
+
   const deleteFromEdit = async () => {
     if (!editDraft) return;
     if (!confirm(`Delete "${editDraft.name}"?`)) return;
     await onDelete(editDraft.id);
     closeEdit();
   };
+
+  // When adding, if the new ingredient matches an existing one (same name +
+  // same unit dimension, e.g. "Milk"/L matches "Milk"/mL), increment the
+  // existing row's quantity instead of creating a duplicate.
   const addItem = async () => {
     if (!addDraft.name.trim()) return;
-    await onAdd(addDraft);
+    const targetKey = ingredientKey(addDraft.name, addDraft.unit);
+    const existing = inventory.find((it) => ingredientKey(it.name, it.unit) === targetKey);
+    if (existing) {
+      const addedBase = toBase(addDraft.quantity, addDraft.unit);
+      const newBase = toBase(existing.quantity, existing.unit) + addedBase;
+      const newQty = Math.round(fromBase(newBase, existing.unit) * 1000) / 1000;
+      await onUpdate({ ...existing, quantity: newQty });
+    } else {
+      await onAdd(addDraft);
+    }
     setAddDraft(blank);
   };
 
@@ -61,7 +92,7 @@ export default function InventoryTab({ inventory, onAdd, onUpdate, onDelete }) {
             </div>
           ))}
         </div>
-        <p className="text-[11px] text-slate-400 mt-4">Tip: tap an ingredient name to edit its quantity, unit, or category.</p>
+        <p className="text-[11px] text-slate-400 mt-4">Tip: tap an ingredient name to edit. Adding an ingredient that already exists merges quantities automatically.</p>
       </section>
 
       <section className="bg-white rounded-xl shadow-sm border border-slate-200 p-4 sm:p-5 h-fit">
